@@ -1,0 +1,72 @@
+#!/bin/bash
+# set -xv
+declare -x awk="/usr/bin/awk"
+declare -x networksetup="/usr/sbin/networksetup"
+declare -x killall="/usr/bin/killall"
+declare -x ping="/sbin/ping"
+declare -ix ENET="1"
+
+# Take IP values from this interface
+# Currently only the built-in ethernets
+
+declare -x BOND_NAME="Ethernet Bond"
+
+OLDIFS="$IFS"
+IFS=$'\n'
+# BELOW: Perl should make this faster if need be
+declare -x IP_ADDRESS="$($networksetup -getinfo "Ethernet $ENET"|
+			$awk '/^IP address/{print $NF;exit}')"
+	echo "Found IP Addres: $IP_ADDRESS"
+declare -x SUBNET_MASK="$($networksetup -getinfo "Ethernet $ENET" |
+			$awk '/^Subnet mask/{print $NF;exit}')"
+declare -x ROUTER="$($networksetup -getinfo "Ethernet $ENET"|
+			$awk '/^Router/{print $NF;exit}')"
+
+for SEARCH_DOM in $($networksetup -getsearchdomains "Ethernet $ENET") ; do
+	let SEARCH_NUM++
+	declare -xa SEARCH_DOMAIN[$SEARCH_NUM]="$SEARCH_DOM"
+done
+for DNS_SVR in $($networksetup -getdnsservers "Ethernet $ENET") ; do
+	let DNS_NUM++
+	declare -xa DNS_SERVER[$DNS_NUM]="$DNS_SVR"
+done
+for ETHERNET in $($networksetup -listallhardwareports |
+		$awk -F":" '/Hardware Port/{gsub(/^ /,"",$2)
+			if(/(e|E)thernet/)
+				{print $2}}') ; do
+declare BOND_SUPPORTED="$($networksetup -isBondSupported "$ETHERNET")"
+if [ "$BOND_SUPPORTED" = "YES" ] ; then
+let BOND_NUMBER++
+	declare -xa ETHERNET_BOND[$BOND_NUMBER]="$ETHERNET"
+fi
+done
+declare -i INTERFACE_ACTIVE="$($networksetup -listallhardwareports |
+				$awk "/$BOND_NAME/"'{seen++}END{print seen}')"
+
+$networksetup -createBond "${BOND_NAME:?}" "${ETHERNET_BOND[@]}"
+
+until [ "$INTERFACE_ACTIVE" -gt 0 ] ; do
+	sleep 1
+	echo "Waiting for configd to see : $BOND_NAME"
+	declare -i INTERFACE_ACTIVE="$($networksetup -listallhardwareports |
+				$awk "/$BOND_NAME/"'{seen++}END{print seen}')"
+done
+$networksetup -setdnsservers "Ethernet Bond Configuration" "${DNS_SERVER[@]}"
+$networksetup -setmanual "Ethernet Bond Configuration" "${IP_ADDRESS:?}" "${SUBNET_MASK:?}" "${ROUTER:?}"
+
+for HARDWARE_PORT in $($networksetup -listallhardwareports |
+			$awk -F":" '/Hardware Port/{gsub(/^ /,"",$2); print $2}' ) ; do
+	if [ "$HARDWARE_PORT" != "${BOND_NAME:?}" ] ; then
+		$networksetup -setnetworkserviceenabled "$HARDWARE_PORT" off
+	fi
+done
+IFS="$OLDIFS"
+$killall configd
+for (( trys = 1 ; trys <=5; trys++ )) ; do
+	echo "Try number: $try" 
+	until $ping -c 1 "${ROUTER:?}" &>/dev/null ; do
+		echo "Pinging ${ROUTER:?}"
+		sleep 1
+	done
+done
+exit 0

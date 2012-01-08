@@ -1,0 +1,6 @@
+This script was used alot in the xserve days but also works on Mac Pros
+Basically it will automate the bond creation of a all ethernet ports on the system. As this option was not avaiable in Auto Server Setup.
+
+Known Issues:
+
+I never added in support for search domains
